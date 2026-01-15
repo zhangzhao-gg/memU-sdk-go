@@ -1,8 +1,23 @@
+/**
+ * [INPUT]: 依赖 time 的 Time 类型
+ * [OUTPUT]: 对外提供 TaskStatusEnum, MemoryResource, MemoryItem, MemoryCategory, TaskStatus, MemorizeResult, RetrieveResult, MemorizeRequest, RetrieveRequest, ListCategoriesRequest, ConversationMessage, Validator 接口
+ * [POS]: SDK 根目录的数据层，定义所有请求响应模型和验证接口，被 client.go 和用户代码消费
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 package memu
 
 import (
+	"fmt"
 	"time"
 )
+
+// Validator 定义参数验证接口
+// ============================================================
+// 消除重复: 统一的验证逻辑，避免在每个方法中重复验证代码
+// ============================================================
+type Validator interface {
+	Validate() error
+}
 
 // TaskStatusEnum represents the status of an asynchronous memorization task.
 type TaskStatusEnum string
@@ -139,4 +154,44 @@ type ListCategoriesRequest struct {
 	UserID string `json:"user_id"`
 	// AgentID is the agent ID for scoping (optional).
 	AgentID *string `json:"agent_id,omitempty"`
+}
+
+// ============================================================
+// 参数验证方法
+// ============================================================
+
+// Validate 验证 MemorizeRequest 参数
+func (r *MemorizeRequest) Validate() error {
+	if r.UserID == "" {
+		return fmt.Errorf("Memorize: UserID is required")
+	}
+	if r.AgentID == "" {
+		return fmt.Errorf("Memorize: AgentID is required")
+	}
+	if len(r.Conversation) == 0 && r.ConversationText == nil {
+		return fmt.Errorf("Memorize: either Conversation or ConversationText must be provided")
+	}
+	return nil
+}
+
+// Validate 验证 RetrieveRequest 参数
+func (r *RetrieveRequest) Validate() error {
+	if r.Query == nil {
+		return fmt.Errorf("Retrieve: Query is required")
+	}
+	if r.UserID == "" {
+		return fmt.Errorf("Retrieve: UserID is required")
+	}
+	if r.AgentID == "" {
+		return fmt.Errorf("Retrieve: AgentID is required")
+	}
+	return nil
+}
+
+// Validate 验证 ListCategoriesRequest 参数
+func (r *ListCategoriesRequest) Validate() error {
+	if r.UserID == "" {
+		return fmt.Errorf("ListCategories: UserID is required")
+	}
+	return nil
 }

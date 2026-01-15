@@ -1,3 +1,10 @@
+/**
+ * [INPUT]: 依赖 Go 标准库 (net/http, encoding/json, context, time, math, bytes, io, fmt, strings, strconv); 依赖 models.go 的 MemorizeRequest, RetrieveRequest, ListCategoriesRequest, MemorizeResult, RetrieveResult, MemoryCategory, TaskStatus, MemoryResource, MemoryItem, Validator; 依赖 errors.go 的 ClientError, AuthenticationError, RateLimitError, NotFoundError, ValidationError; 依赖 options.go 的 Option; 依赖 retry.go 的 RetryPolicy
+ * [OUTPUT]: 对外提供 Client 类型, NewClient, Memorize, Retrieve, ListCategories, GetTaskStatus 方法; 内部提供 exponentialBackoff, parseJSONObject, parseJSONArray 辅助方法
+ * [POS]: SDK 根目录的核心层，是整个 SDK 的入口点，实现 HTTP 客户端·重试机制·四大 API 方法·JSON 解析·参数验证
+ * [REFACTORING]: Phase 2 进行中 - 添加接口抽象·可配置重试策略
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 package memu
 
 import (
@@ -6,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,11 +34,12 @@ const (
 
 // Client is the MemU API client.
 type Client struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
-	maxRetries int
-	timeout    time.Duration
+	apiKey      string
+	baseURL     string
+	httpClient  *http.Client
+	maxRetries  int
+	timeout     time.Duration
+	retryPolicy RetryPolicy
 }
 
 // NewClient creates a new MemU API client.
@@ -49,6 +56,7 @@ func NewClient(apiKey string, opts ...Option) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: DefaultTimeout,
 		},
+		retryPolicy: NewDefaultRetryPolicy(nil),
 	}
 
 	// Apply options
@@ -73,11 +81,170 @@ func (c *Client) defaultHeaders() map[string]string {
 	}
 }
 
+// parseJSONObject 解析 JSON 对象到结构体，避免双重序列化
+// ============================================================
+// 性能优化: 直接反序列化，避免 Marshal → Unmarshal 的性能浪费
+// 错误修复: 不再吞掉 JSON 解析错误
+// ============================================================
+func parseJSONObject[T any](data interface{}) (*T, error) {
+	if data == nil {
+		return nil, nil
+	}
+
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal object: %w", err)
+	}
+
+	var obj T
+	if err := json.Unmarshal(jsonBytes, &obj); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal object: %w", err)
+	}
+
+	return &obj, nil
+}
+
+// parseJSONArray 解析 JSON 数组到结构体切片，避免双重序列化
+// ============================================================
+// 性能优化: 一次性序列化整个数组，而不是逐个元素处理
+// 错误修复: 不再吞掉 JSON 解析错误
+// ============================================================
+func parseJSONArray[T any](data []interface{}) ([]*T, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	// Marshal the entire array once
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal array: %w", err)
+	}
+
+	// Unmarshal into the target type
+	var result []*T
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal array: %w", err)
+	}
+
+	return result, nil
+}
+
+// parseMemorizeResult 解析 Memorize 操作的结果
+// ============================================================
+// 消除重复: 统一的结果解析逻辑，避免在多处重复相同代码
+// ============================================================
+func parseMemorizeResult(response map[string]interface{}) (*MemorizeResult, error) {
+	result := &MemorizeResult{}
+
+	// Parse resource
+	if resource, ok := response["resource"]; ok {
+		r, err := parseJSONObject[MemoryResource](resource)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse resource: %w", err)
+		}
+		result.Resource = r
+	}
+
+	// Parse items
+	if items, ok := response["items"].([]interface{}); ok {
+		parsedItems, err := parseJSONArray[MemoryItem](items)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse items: %w", err)
+		}
+		result.Items = parsedItems
+	}
+
+	// Parse categories
+	if categories, ok := response["categories"].([]interface{}); ok {
+		parsedCategories, err := parseJSONArray[MemoryCategory](categories)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse categories: %w", err)
+		}
+		result.Categories = parsedCategories
+	}
+
+	return result, nil
+}
+
+// waitForTaskCompletion 等待异步任务完成
+// ============================================================
+// 消除重复: 统一的轮询等待逻辑，可复用于其他异步操作
+// ============================================================
+func (c *Client) waitForTaskCompletion(ctx context.Context, taskID string, pollInterval, timeout time.Duration) (*TaskStatus, error) {
+	// Create a context with timeout
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, fmt.Errorf("task timed out after %v", timeout)
+		case <-ticker.C:
+			status, err := c.GetTaskStatus(ctx, taskID)
+			if err != nil {
+				return nil, err
+			}
+
+			// Check if task is complete
+			if status.Status == TaskStatusCompleted || status.Status == TaskStatusSuccess {
+				return status, nil
+			}
+
+			// Check if task failed
+			if status.Status == TaskStatusFailed {
+				message := "task failed"
+				if status.Message != nil {
+					message = *status.Message
+				}
+				return nil, fmt.Errorf(message)
+			}
+
+			// Task is still processing, continue polling
+		}
+	}
+}
+
+// buildMemorizePayload 构建 Memorize 请求的 payload
+// ============================================================
+// 消除重复: 统一的 payload 构建逻辑，简化 Memorize 方法
+// ============================================================
+func buildMemorizePayload(req *MemorizeRequest) map[string]interface{} {
+	payload := map[string]interface{}{
+		"user_id":  req.UserID,
+		"agent_id": req.AgentID,
+	}
+
+	if req.UserName != "" {
+		payload["user_name"] = req.UserName
+	} else {
+		payload["user_name"] = "User"
+	}
+
+	if req.AgentName != "" {
+		payload["agent_name"] = req.AgentName
+	} else {
+		payload["agent_name"] = "Assistant"
+	}
+
+	if len(req.Conversation) > 0 {
+		payload["conversation"] = req.Conversation
+	} else if req.ConversationText != nil {
+		payload["conversation_text"] = *req.ConversationText
+	}
+
+	if req.SessionDate != nil {
+		payload["session_date"] = *req.SessionDate
+	}
+
+	return payload
+}
+
 // request makes an HTTP request to the API with automatic retry logic.
 func (c *Client) request(ctx context.Context, method, path string, body interface{}, params map[string]string) (map[string]interface{}, error) {
-	var lastErr error
-
-	for attempt := 0; attempt < c.maxRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
 		// Prepare request body
 		var bodyReader io.Reader
 		if body != nil {
@@ -112,13 +279,12 @@ func (c *Client) request(ctx context.Context, method, path string, body interfac
 		// Make request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			lastErr = err
-			if attempt < c.maxRetries-1 {
-				waitTime := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-				time.Sleep(waitTime)
+			// Check if we should retry
+			if c.retryPolicy.ShouldRetry(attempt, 0, err) {
+				time.Sleep(c.retryPolicy.GetBackoff(attempt))
 				continue
 			}
-			return nil, fmt.Errorf("request failed after %d attempts: %w", c.maxRetries, err)
+			return nil, fmt.Errorf("request failed after %d attempts: %w", attempt+1, err)
 		}
 		defer resp.Body.Close()
 
@@ -148,10 +314,10 @@ func (c *Client) request(ctx context.Context, method, path string, body interfac
 					waitTime = time.Duration(seconds * float64(time.Second))
 				}
 			} else {
-				waitTime = time.Duration(math.Pow(2, float64(attempt))) * time.Second
+				waitTime = c.retryPolicy.GetBackoff(attempt)
 			}
 
-			if attempt < c.maxRetries-1 {
+			if c.retryPolicy.ShouldRetry(attempt, resp.StatusCode, nil) {
 				time.Sleep(waitTime)
 				continue
 			}
@@ -163,9 +329,8 @@ func (c *Client) request(ctx context.Context, method, path string, body interfac
 
 		// Handle server errors (5xx) - retry
 		if resp.StatusCode >= 500 {
-			if attempt < c.maxRetries-1 {
-				waitTime := time.Duration(math.Pow(2, float64(attempt))) * time.Second
-				time.Sleep(waitTime)
+			if c.retryPolicy.ShouldRetry(attempt, resp.StatusCode, nil) {
+				time.Sleep(c.retryPolicy.GetBackoff(attempt))
 				continue
 			}
 			statusCode := resp.StatusCode
@@ -180,8 +345,6 @@ func (c *Client) request(ctx context.Context, method, path string, body interfac
 		// Success
 		return result, nil
 	}
-
-	return nil, fmt.Errorf("request failed after %d attempts: %w", c.maxRetries, lastErr)
 }
 
 // raiseForStatus raises an appropriate error for HTTP error status codes.
@@ -203,48 +366,15 @@ func (c *Client) raiseForStatus(statusCode int, path string, response map[string
 // Memorize memorizes a conversation and extracts structured memory.
 func (c *Client) Memorize(ctx context.Context, req *MemorizeRequest) (*MemorizeResult, error) {
 	if req == nil {
-		return nil, fmt.Errorf("request is required")
+		return nil, fmt.Errorf("Memorize: request is required")
 	}
 
-	if len(req.Conversation) == 0 && req.ConversationText == nil {
-		return nil, fmt.Errorf("either Conversation or ConversationText must be provided")
-	}
-
-	if req.UserID == "" {
-		return nil, fmt.Errorf("UserID is required")
-	}
-
-	if req.AgentID == "" {
-		return nil, fmt.Errorf("AgentID is required")
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
 
 	// Build request payload
-	payload := map[string]interface{}{
-		"user_id":  req.UserID,
-		"agent_id": req.AgentID,
-	}
-
-	if req.UserName != "" {
-		payload["user_name"] = req.UserName
-	} else {
-		payload["user_name"] = "User"
-	}
-
-	if req.AgentName != "" {
-		payload["agent_name"] = req.AgentName
-	} else {
-		payload["agent_name"] = "Assistant"
-	}
-
-	if len(req.Conversation) > 0 {
-		payload["conversation"] = req.Conversation
-	} else if req.ConversationText != nil {
-		payload["conversation_text"] = *req.ConversationText
-	}
-
-	if req.SessionDate != nil {
-		payload["session_date"] = *req.SessionDate
-	}
+	payload := buildMemorizePayload(req)
 
 	// Make request
 	response, err := c.request(ctx, "POST", "/api/v3/memory/memorize", payload, nil)
@@ -270,96 +400,33 @@ func (c *Client) Memorize(ctx context.Context, req *MemorizeRequest) (*MemorizeR
 			timeout = DefaultWaitTimeout
 		}
 
-		// Create a context with timeout
-		waitCtx, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
+		// Wait for task completion using the extracted function
+		status, err := c.waitForTaskCompletion(ctx, *result.TaskID, pollInterval, timeout)
+		if err != nil {
+			return nil, err
+		}
 
-		ticker := time.NewTicker(pollInterval)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-waitCtx.Done():
-				return nil, fmt.Errorf("memorization task timed out after %v", timeout)
-			case <-ticker.C:
-				status, err := c.GetTaskStatus(ctx, *result.TaskID)
-				if err != nil {
-					return nil, err
-				}
-
-				if status.Status == TaskStatusCompleted || status.Status == TaskStatusSuccess {
-					// Parse result
-					if status.Result != nil {
-						if resource, ok := status.Result["resource"].(map[string]interface{}); ok {
-							resourceData, _ := json.Marshal(resource)
-							var r MemoryResource
-							if err := json.Unmarshal(resourceData, &r); err == nil {
-								result.Resource = &r
-							}
-						}
-
-						if items, ok := status.Result["items"].([]interface{}); ok {
-							for _, item := range items {
-								itemData, _ := json.Marshal(item)
-								var i MemoryItem
-								if err := json.Unmarshal(itemData, &i); err == nil {
-									result.Items = append(result.Items, &i)
-								}
-							}
-						}
-
-						if categories, ok := status.Result["categories"].([]interface{}); ok {
-							for _, cat := range categories {
-								catData, _ := json.Marshal(cat)
-								var c MemoryCategory
-								if err := json.Unmarshal(catData, &c); err == nil {
-									result.Categories = append(result.Categories, &c)
-								}
-							}
-						}
-					}
-					return result, nil
-				}
-
-				if status.Status == TaskStatusFailed {
-					message := "memorization task failed"
-					if status.Message != nil {
-						message = *status.Message
-					}
-					return nil, fmt.Errorf(message)
-				}
+		// Parse result from completed task
+		if status.Result != nil {
+			parsedResult, err := parseMemorizeResult(status.Result)
+			if err != nil {
+				return nil, err
 			}
+			result.Resource = parsedResult.Resource
+			result.Items = parsedResult.Items
+			result.Categories = parsedResult.Categories
 		}
+		return result, nil
 	}
 
-	// Parse immediate result
-	if resource, ok := response["resource"].(map[string]interface{}); ok {
-		resourceData, _ := json.Marshal(resource)
-		var r MemoryResource
-		if err := json.Unmarshal(resourceData, &r); err == nil {
-			result.Resource = &r
-		}
+	// Parse immediate result using the extracted function
+	parsedResult, err := parseMemorizeResult(response)
+	if err != nil {
+		return nil, err
 	}
-
-	if items, ok := response["items"].([]interface{}); ok {
-		for _, item := range items {
-			itemData, _ := json.Marshal(item)
-			var i MemoryItem
-			if err := json.Unmarshal(itemData, &i); err == nil {
-				result.Items = append(result.Items, &i)
-			}
-		}
-	}
-
-	if categories, ok := response["categories"].([]interface{}); ok {
-		for _, cat := range categories {
-			catData, _ := json.Marshal(cat)
-			var c MemoryCategory
-			if err := json.Unmarshal(catData, &c); err == nil {
-				result.Categories = append(result.Categories, &c)
-			}
-		}
-	}
+	result.Resource = parsedResult.Resource
+	result.Items = parsedResult.Items
+	result.Categories = parsedResult.Categories
 
 	return result, nil
 }
@@ -376,32 +443,23 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*TaskStatus,
 		return nil, err
 	}
 
-	// Parse response
-	responseData, _ := json.Marshal(response)
-	var status TaskStatus
-	if err := json.Unmarshal(responseData, &status); err != nil {
+	// Parse response using parseJSONObject to avoid double serialization
+	status, err := parseJSONObject[TaskStatus](response)
+	if err != nil {
 		return nil, fmt.Errorf("failed to parse task status: %w", err)
 	}
 
-	return &status, nil
+	return status, nil
 }
 
 // Retrieve retrieves relevant memories based on a query.
 func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveResult, error) {
 	if req == nil {
-		return nil, fmt.Errorf("request is required")
+		return nil, fmt.Errorf("Retrieve: request is required")
 	}
 
-	if req.Query == nil {
-		return nil, fmt.Errorf("Query is required")
-	}
-
-	if req.UserID == "" {
-		return nil, fmt.Errorf("UserID is required")
-	}
-
-	if req.AgentID == "" {
-		return nil, fmt.Errorf("AgentID is required")
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
 
 	// Build request payload
@@ -421,33 +479,27 @@ func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveR
 	result := &RetrieveResult{}
 
 	if categories, ok := response["categories"].([]interface{}); ok {
-		for _, cat := range categories {
-			catData, _ := json.Marshal(cat)
-			var c MemoryCategory
-			if err := json.Unmarshal(catData, &c); err == nil {
-				result.Categories = append(result.Categories, &c)
-			}
+		parsedCategories, err := parseJSONArray[MemoryCategory](categories)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse categories: %w", err)
 		}
+		result.Categories = parsedCategories
 	}
 
 	if items, ok := response["items"].([]interface{}); ok {
-		for _, item := range items {
-			itemData, _ := json.Marshal(item)
-			var i MemoryItem
-			if err := json.Unmarshal(itemData, &i); err == nil {
-				result.Items = append(result.Items, &i)
-			}
+		parsedItems, err := parseJSONArray[MemoryItem](items)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse items: %w", err)
 		}
+		result.Items = parsedItems
 	}
 
 	if resources, ok := response["resources"].([]interface{}); ok {
-		for _, res := range resources {
-			resData, _ := json.Marshal(res)
-			var r MemoryResource
-			if err := json.Unmarshal(resData, &r); err == nil {
-				result.Resources = append(result.Resources, &r)
-			}
+		parsedResources, err := parseJSONArray[MemoryResource](resources)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse resources: %w", err)
 		}
+		result.Resources = parsedResources
 	}
 
 	if nextStepQuery, ok := response["next_step_query"].(string); ok {
@@ -460,11 +512,11 @@ func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveR
 // ListCategories lists all memory categories.
 func (c *Client) ListCategories(ctx context.Context, req *ListCategoriesRequest) ([]*MemoryCategory, error) {
 	if req == nil {
-		return nil, fmt.Errorf("request is required")
+		return nil, fmt.Errorf("ListCategories: request is required")
 	}
 
-	if req.UserID == "" {
-		return nil, fmt.Errorf("UserID is required")
+	if err := req.Validate(); err != nil {
+		return nil, err
 	}
 
 	// Build request payload
@@ -493,13 +545,11 @@ func (c *Client) ListCategories(ctx context.Context, req *ListCategoriesRequest)
 	}
 
 	if categoriesList, ok := categoriesData.([]interface{}); ok {
-		for _, cat := range categoriesList {
-			catData, _ := json.Marshal(cat)
-			var c MemoryCategory
-			if err := json.Unmarshal(catData, &c); err == nil {
-				categories = append(categories, &c)
-			}
+		parsedCategories, err := parseJSONArray[MemoryCategory](categoriesList)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse categories: %w", err)
 		}
+		categories = parsedCategories
 	}
 
 	return categories, nil

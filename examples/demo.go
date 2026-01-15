@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 context, fmt, os 标准库; 依赖 github.com/NevaMind-AI/memU-sdk-go 的 Client 和所有 API 方法
+ * [OUTPUT]: 可执行的 main 程序，演示 SDK 完整用法
+ * [POS]: examples/ 的唯一示例文件，展示四大 API 方法的使用和错误处理
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 package main
 
 import (

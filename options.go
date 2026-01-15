@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 net/http 的 Client, time 的 Duration; 依赖 retry.go 的 RetryPolicy
+ * [OUTPUT]: 对外提供 Option 类型, WithBaseURL, WithTimeout, WithMaxRetries, WithHTTPClient, WithRetryPolicy 函数
+ * [POS]: SDK 根目录的配置层，被 client.go 的 NewClient 消费，实现选项模式
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 package memu
 
 import (
@@ -33,5 +39,12 @@ func WithMaxRetries(retries int) Option {
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *Client) {
 		c.httpClient = client
+	}
+}
+
+// WithRetryPolicy sets a custom retry policy.
+func WithRetryPolicy(policy RetryPolicy) Option {
+	return func(c *Client) {
+		c.retryPolicy = policy
 	}
 }

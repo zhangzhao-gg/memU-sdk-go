@@ -1,3 +1,9 @@
+/**
+ * [INPUT]: 依赖 fmt 的格式化能力
+ * [OUTPUT]: 对外提供 ClientError, AuthenticationError, RateLimitError, NotFoundError, ValidationError 类型及其构造函数
+ * [POS]: SDK 根目录的错误处理层，定义错误类型层次，被 client.go 和用户代码消费
+ * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
+ */
 package memu
 
 import (
