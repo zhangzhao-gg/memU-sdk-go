@@ -133,79 +133,6 @@ func parseJSONArray[T any](data []interface{}) ([]*T, error) {
 // ============================================================
 // 消除重复: 统一的结果解析逻辑，避免在多处重复相同代码
 // ============================================================
-func parseMemorizeResult(response map[string]interface{}) (*MemorizeResult, error) {
-	result := &MemorizeResult{}
-
-	// Parse resource
-	if resource, ok := response["resource"]; ok {
-		r, err := parseJSONObject[MemoryResource](resource)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse resource: %w", err)
-		}
-		result.Resource = r
-	}
-
-	// Parse items
-	if items, ok := response["items"].([]interface{}); ok {
-		parsedItems, err := parseJSONArray[MemoryItem](items)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse items: %w", err)
-		}
-		result.Items = parsedItems
-	}
-
-	// Parse categories
-	if categories, ok := response["categories"].([]interface{}); ok {
-		parsedCategories, err := parseJSONArray[MemoryCategory](categories)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse categories: %w", err)
-		}
-		result.Categories = parsedCategories
-	}
-
-	return result, nil
-}
-
-// waitForTaskCompletion 等待异步任务完成
-// ============================================================
-// 消除重复: 统一的轮询等待逻辑，可复用于其他异步操作
-// ============================================================
-func (c *Client) waitForTaskCompletion(ctx context.Context, taskID string, pollInterval, timeout time.Duration) (*TaskStatus, error) {
-	// Create a context with timeout
-	waitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(pollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-waitCtx.Done():
-			return nil, fmt.Errorf("task timed out after %v", timeout)
-		case <-ticker.C:
-			status, err := c.GetTaskStatus(ctx, taskID)
-			if err != nil {
-				return nil, err
-			}
-
-			// Check if task is complete
-			if status.Status == TaskStatusCompleted || status.Status == TaskStatusSuccess {
-				return status, nil
-			}
-
-			// Check if task failed
-			if status.Status == TaskStatusFailed {
-				message := "task failed"
-				if status.Message != nil {
-					message = *status.Message
-				}
-				return nil, fmt.Errorf(message)
-			}
-
-			// Task is still processing, continue polling
-		}
-	}
-}
 
 // buildMemorizePayload 构建 Memorize 请求的 payload
 // ============================================================
@@ -387,46 +314,12 @@ func (c *Client) Memorize(ctx context.Context, req *MemorizeRequest) (*MemorizeR
 	if taskID, ok := response["task_id"].(string); ok {
 		result.TaskID = &taskID
 	}
-
-	// Wait for completion if requested
-	if req.WaitForCompletion && result.TaskID != nil {
-		pollInterval := req.PollInterval
-		if pollInterval == 0 {
-			pollInterval = DefaultPollInterval
-		}
-
-		timeout := req.Timeout
-		if timeout == 0 {
-			timeout = DefaultWaitTimeout
-		}
-
-		// Wait for task completion using the extracted function
-		status, err := c.waitForTaskCompletion(ctx, *result.TaskID, pollInterval, timeout)
-		if err != nil {
-			return nil, err
-		}
-
-		// Parse result from completed task
-		if status.Result != nil {
-			parsedResult, err := parseMemorizeResult(status.Result)
-			if err != nil {
-				return nil, err
-			}
-			result.Resource = parsedResult.Resource
-			result.Items = parsedResult.Items
-			result.Categories = parsedResult.Categories
-		}
-		return result, nil
+	if status, ok := response["status"].(string); ok {
+		result.Status = &status
 	}
-
-	// Parse immediate result using the extracted function
-	parsedResult, err := parseMemorizeResult(response)
-	if err != nil {
-		return nil, err
+	if message, ok := response["message"].(string); ok {
+		result.Message = &message
 	}
-	result.Resource = parsedResult.Resource
-	result.Items = parsedResult.Items
-	result.Categories = parsedResult.Categories
 
 	return result, nil
 }
@@ -502,8 +395,8 @@ func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveR
 		result.Resources = parsedResources
 	}
 
-	if nextStepQuery, ok := response["next_step_query"].(string); ok {
-		result.NextStepQuery = &nextStepQuery
+	if rewrittenQuery, ok := response["rewritten_query"].(string); ok {
+		result.RewrittenQuery = &rewrittenQuery
 	}
 
 	return result, nil

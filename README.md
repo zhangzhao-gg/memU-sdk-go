@@ -124,7 +124,7 @@ client, err := memu.NewClient(
 
 #### Memorize
 
-Memorize a conversation and extract structured memory.
+Memorize a conversation and extract structured memory. This is an **asynchronous operation** that returns immediately with a task ID.
 
 ```go
 func (c *Client) Memorize(ctx context.Context, req *MemorizeRequest) (*MemorizeResult, error)
@@ -132,28 +132,83 @@ func (c *Client) Memorize(ctx context.Context, req *MemorizeRequest) (*MemorizeR
 
 **Request Fields:**
 - `Conversation` - List of conversation messages (optional if ConversationText is provided)
+  - **Minimum 3 messages required**
+  - Each message can include:
+    - `Role` - "user" or "assistant" (required)
+    - `Content` - Message content (required)
+    - `Name` - Speaker name (optional)
+    - `CreatedAt` - Timestamp in ISO format (optional)
 - `ConversationText` - Alternative: raw conversation text (optional if Conversation is provided)
 - `UserID` - User ID for scoping the memory (required)
 - `AgentID` - Agent ID for scoping the memory (required)
 - `UserName` - Display name for the user (default: "User")
 - `AgentName` - Display name for the agent (default: "Assistant")
 - `SessionDate` - Optional session date in ISO format
-- `WaitForCompletion` - If true, poll until the task completes (default: false)
-- `PollInterval` - Seconds between status checks when waiting (default: 2s)
-- `Timeout` - Maximum time to wait for completion (default: 5 minutes)
+
+**Response Fields:**
+- `TaskID` - Task ID for polling status
+- `Status` - Task status (typically "PENDING")
+- `Message` - Descriptive message
 
 **Example:**
 ```go
+// Basic example
 result, err := client.Memorize(ctx, &memu.MemorizeRequest{
     Conversation: []memu.ConversationMessage{
         {Role: "user", Content: "I love pasta"},
         {Role: "assistant", Content: "Great choice!"},
+        {Role: "user", Content: "Especially carbonara"},
     },
-    UserID:            "user_123",
-    AgentID:           "agent_456",
-    WaitForCompletion: true,
+    UserID:  "user_123",
+    AgentID: "agent_456",
+})
+
+if err != nil {
+    log.Fatal(err)
+}
+
+fmt.Printf("Task ID: %s\n", *result.TaskID)
+fmt.Printf("Status: %s\n", *result.Status)
+
+// Poll for completion
+status, err := client.GetTaskStatus(ctx, *result.TaskID)
+
+// Advanced example with full metadata
+name1 := "John"
+name2 := "Coach"
+time1 := "2024-01-15T10:30:00Z"
+time2 := "2024-01-15T10:30:15Z"
+sessionDate := "2024-01-15T10:30:00Z"
+
+result, err := client.Memorize(ctx, &memu.MemorizeRequest{
+    Conversation: []memu.ConversationMessage{
+        {
+            Role:      "user",
+            Content:   "I love playing tennis on weekends",
+            Name:      &name1,
+            CreatedAt: &time1,
+        },
+        {
+            Role:      "assistant",
+            Content:   "That's great! Tennis is excellent exercise.",
+            Name:      &name2,
+            CreatedAt: &time2,
+        },
+        {
+            Role:      "user",
+            Content:   "I play every Saturday morning",
+            Name:      &name1,
+            CreatedAt: &time1,
+        },
+    },
+    UserID:      "user_123",
+    AgentID:     "agent_456",
+    UserName:    "John Doe",
+    AgentName:   "Tennis Coach AI",
+    SessionDate: &sessionDate,
 })
 ```
+
 
 #### Retrieve
 

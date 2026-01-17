@@ -93,25 +93,28 @@ type TaskStatus struct {
 }
 
 // MemorizeResult represents the result of a memorization operation.
+// The API returns only task_id, status, and message.
+// To get the extracted memories, use GetTaskStatus or Retrieve API.
 type MemorizeResult struct {
-	TaskID     *string           `json:"task_id,omitempty"`
-	Resource   *MemoryResource   `json:"resource,omitempty"`
-	Items      []*MemoryItem     `json:"items,omitempty"`
-	Categories []*MemoryCategory `json:"categories,omitempty"`
+	TaskID  *string `json:"task_id,omitempty"`
+	Status  *string `json:"status,omitempty"`
+	Message *string `json:"message,omitempty"`
 }
 
 // RetrieveResult represents the result of a memory retrieval operation.
 type RetrieveResult struct {
-	Categories    []*MemoryCategory `json:"categories,omitempty"`
-	Items         []*MemoryItem     `json:"items,omitempty"`
-	Resources     []*MemoryResource `json:"resources,omitempty"`
-	NextStepQuery *string           `json:"next_step_query,omitempty"`
+	Categories     []*MemoryCategory `json:"categories,omitempty"`
+	Items          []*MemoryItem     `json:"items,omitempty"`
+	Resources      []*MemoryResource `json:"resources,omitempty"`
+	RewrittenQuery *string           `json:"rewritten_query,omitempty"`
 }
 
 // ConversationMessage represents a single message in a conversation.
 type ConversationMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role      string  `json:"role"`
+	Content   string  `json:"content"`
+	Name      *string `json:"name,omitempty"`
+	CreatedAt *string `json:"created_at,omitempty"`
 }
 
 // MemorizeRequest represents a request to memorize a conversation.
@@ -130,12 +133,6 @@ type MemorizeRequest struct {
 	AgentName string `json:"agent_name,omitempty"`
 	// SessionDate is an optional session date in ISO format.
 	SessionDate *string `json:"session_date,omitempty"`
-	// WaitForCompletion indicates whether to poll until the task completes.
-	WaitForCompletion bool `json:"-"`
-	// PollInterval is the interval between status checks when waiting (default: 2s).
-	PollInterval time.Duration `json:"-"`
-	// Timeout is the maximum time to wait for completion (default: 5 minutes).
-	Timeout time.Duration `json:"-"`
 }
 
 // RetrieveRequest represents a request to retrieve memories.
@@ -170,6 +167,9 @@ func (r *MemorizeRequest) Validate() error {
 	}
 	if len(r.Conversation) == 0 && r.ConversationText == nil {
 		return fmt.Errorf("Memorize: either Conversation or ConversationText must be provided")
+	}
+	if len(r.Conversation) > 0 && len(r.Conversation) < 3 {
+		return fmt.Errorf("Memorize: Conversation must contain at least 3 messages")
 	}
 	return nil
 }
