@@ -26,8 +26,6 @@ func main() {
 	} else {
 		fmt.Printf("   Task ID: %s\n", status.TaskID)
 		fmt.Printf("   Status: %s\n", status.Status)
-		if status.Message != nil {
-			fmt.Printf("   Message: %s\n", *status.Message)
-		}
+		fmt.Printf("   Message: %s\n", status.DetailInfo)
 	}
 }
