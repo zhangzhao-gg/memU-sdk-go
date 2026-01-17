@@ -8,7 +8,6 @@ package memu
 
 import (
 	"fmt"
-	"time"
 )
 
 // Validator 定义参数验证接口
@@ -67,10 +66,9 @@ type MemoryCategory struct {
 
 // TaskStatus represents status information for an asynchronous memorization task.
 type TaskStatus struct {
-	TaskID    string         `json:"task_id"`
-	Status    TaskStatusEnum `json:"status"`
-	CreatedAt *time.Time     `json:"created_at,omitempty"`
-	UpdatedAt *time.Time     `json:"updated_at,omitempty"`
+	TaskID  string         `json:"task_id"`
+	Status  TaskStatusEnum `json:"status"`
+	Message *string        `json:"message,omitempty"`
 }
 
 // RetrieveResult represents the result of a memory retrieval operation.

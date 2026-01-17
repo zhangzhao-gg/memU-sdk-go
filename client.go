@@ -336,6 +336,9 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*TaskStatus,
 		return nil, err
 	}
 
+	// Debug: print full response
+	fmt.Printf("[DEBUG] GetTaskStatus response: %+v\n", response)
+
 	// Parse response using parseJSONObject to avoid double serialization
 	status, err := parseJSONObject[TaskStatus](response)
 	if err != nil {
