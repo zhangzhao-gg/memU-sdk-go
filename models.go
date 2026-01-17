@@ -39,74 +39,46 @@ const (
 // Resources are the source materials (conversations, documents, images, etc.)
 // from which memory items are extracted.
 type MemoryResource struct {
-	ID        *string                `json:"id,omitempty"`
-	URL       *string                `json:"url,omitempty"`
-	Modality  *string                `json:"modality,omitempty"`
-	Caption   *string                `json:"caption,omitempty"`
-	CreatedAt *time.Time             `json:"created_at,omitempty"`
-	UpdatedAt *time.Time             `json:"updated_at,omitempty"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	Modality    *string                `json:"modality,omitempty"`
+	ResourceURL *string                `json:"resource_url,omitempty"`
+	Caption     *string                `json:"caption,omitempty"`
+	Content     map[string]interface{} `json:"content,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // MemoryItem represents a discrete memory unit extracted from resources.
 // Memory items are individual pieces of information such as preferences,
 // skills, opinions, habits, relationships, etc.
 type MemoryItem struct {
-	ID           *string                `json:"id,omitempty"`
-	Summary      *string                `json:"summary,omitempty"`
-	Content      *string                `json:"content,omitempty"`
-	MemoryType   *string                `json:"memory_type,omitempty"`
-	CategoryID   *string                `json:"category_id,omitempty"`
-	CategoryName *string                `json:"category_name,omitempty"`
-	ResourceID   *string                `json:"resource_id,omitempty"`
-	Score        *float64               `json:"score,omitempty"`
-	CreatedAt    *time.Time             `json:"created_at,omitempty"`
-	UpdatedAt    *time.Time             `json:"updated_at,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	Content    *string `json:"content,omitempty"`
+	MemoryType *string `json:"memory_type,omitempty"`
 }
 
 // MemoryCategory represents an aggregated memory category.
 // Categories organize related memory items and provide summaries
 // of clustered information (e.g., preferences.md, work_life.md).
 type MemoryCategory struct {
-	ID          *string                `json:"id,omitempty"`
-	Name        *string                `json:"name,omitempty"`
-	Summary     *string                `json:"summary,omitempty"`
-	Description *string                `json:"description,omitempty"`
-	Content     *string                `json:"content,omitempty"`
-	ItemCount   *int                   `json:"item_count,omitempty"`
-	Score       *float64               `json:"score,omitempty"`
-	CreatedAt   *time.Time             `json:"created_at,omitempty"`
-	UpdatedAt   *time.Time             `json:"updated_at,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	Name        *string `json:"name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Summary     *string `json:"summary,omitempty"`
+	UserID      *string `json:"user_id,omitempty"`
+	AgentID     *string `json:"agent_id,omitempty"`
 }
 
 // TaskStatus represents status information for an asynchronous memorization task.
 type TaskStatus struct {
-	TaskID    string                 `json:"task_id"`
-	Status    TaskStatusEnum         `json:"status"`
-	Progress  *float64               `json:"progress,omitempty"`
-	Message   *string                `json:"message,omitempty"`
-	Result    map[string]interface{} `json:"result,omitempty"`
-	CreatedAt *time.Time             `json:"created_at,omitempty"`
-	UpdatedAt *time.Time             `json:"updated_at,omitempty"`
-}
-
-// MemorizeResult represents the result of a memorization operation.
-// The API returns only task_id, status, and message.
-// To get the extracted memories, use GetTaskStatus or Retrieve API.
-type MemorizeResult struct {
-	TaskID  *string `json:"task_id,omitempty"`
-	Status  *string `json:"status,omitempty"`
-	Message *string `json:"message,omitempty"`
+	TaskID    string         `json:"task_id"`
+	Status    TaskStatusEnum `json:"status"`
+	CreatedAt *time.Time     `json:"created_at,omitempty"`
+	UpdatedAt *time.Time     `json:"updated_at,omitempty"`
 }
 
 // RetrieveResult represents the result of a memory retrieval operation.
 type RetrieveResult struct {
+	RewrittenQuery *string           `json:"rewritten_query,omitempty"`
 	Categories     []*MemoryCategory `json:"categories,omitempty"`
 	Items          []*MemoryItem     `json:"items,omitempty"`
 	Resources      []*MemoryResource `json:"resources,omitempty"`
-	RewrittenQuery *string           `json:"rewritten_query,omitempty"`
 }
 
 // ConversationMessage represents a single message in a conversation.
@@ -133,6 +105,15 @@ type MemorizeRequest struct {
 	AgentName string `json:"agent_name,omitempty"`
 	// SessionDate is an optional session date in ISO format.
 	SessionDate *string `json:"session_date,omitempty"`
+}
+
+// MemorizeResult represents the result of a memorization operation.
+// The API returns only task_id, status, and message.
+// To get the extracted memories, use GetTaskStatus or Retrieve API.
+type MemorizeResult struct {
+	TaskID  *string `json:"task_id,omitempty"`
+	Status  *string `json:"status,omitempty"`
+	Message *string `json:"message,omitempty"`
 }
 
 // RetrieveRequest represents a request to retrieve memories.

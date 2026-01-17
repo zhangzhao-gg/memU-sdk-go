@@ -345,6 +345,49 @@ func (c *Client) GetTaskStatus(ctx context.Context, taskID string) (*TaskStatus,
 	return status, nil
 }
 
+// ListCategories lists all memory categories.
+func (c *Client) ListCategories(ctx context.Context, req *ListCategoriesRequest) ([]*MemoryCategory, error) {
+	if req == nil {
+		return nil, fmt.Errorf("ListCategories: request is required")
+	}
+
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+
+	// Build request payload
+	payload := map[string]interface{}{
+		"user_id":  req.UserID,
+		"agent_id": req.AgentID,
+	}
+
+	// Make request
+	response, err := c.request(ctx, "POST", "/api/v3/memory/categories", payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse response
+	var categories []*MemoryCategory
+
+	// Try to get categories from "categories" field first
+	categoriesData, ok := response["categories"]
+	if !ok {
+		// If not found, assume the response itself is the categories array
+		categoriesData = response
+	}
+
+	if categoriesList, ok := categoriesData.([]interface{}); ok {
+		parsedCategories, err := parseJSONArray[MemoryCategory](categoriesList)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse categories: %w", err)
+		}
+		categories = parsedCategories
+	}
+
+	return categories, nil
+}
+
 // Retrieve retrieves relevant memories based on a query.
 func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveResult, error) {
 	if req == nil {
@@ -400,50 +443,4 @@ func (c *Client) Retrieve(ctx context.Context, req *RetrieveRequest) (*RetrieveR
 	}
 
 	return result, nil
-}
-
-// ListCategories lists all memory categories.
-func (c *Client) ListCategories(ctx context.Context, req *ListCategoriesRequest) ([]*MemoryCategory, error) {
-	if req == nil {
-		return nil, fmt.Errorf("ListCategories: request is required")
-	}
-
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
-
-	// Build request payload
-	payload := map[string]interface{}{
-		"user_id": req.UserID,
-	}
-
-	if req.AgentID != nil {
-		payload["agent_id"] = *req.AgentID
-	}
-
-	// Make request
-	response, err := c.request(ctx, "POST", "/api/v3/memory/categories", payload, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Parse response
-	var categories []*MemoryCategory
-
-	// Try to get categories from "categories" field first
-	categoriesData, ok := response["categories"]
-	if !ok {
-		// If not found, assume the response itself is the categories array
-		categoriesData = response
-	}
-
-	if categoriesList, ok := categoriesData.([]interface{}); ok {
-		parsedCategories, err := parseJSONArray[MemoryCategory](categoriesList)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse categories: %w", err)
-		}
-		categories = parsedCategories
-	}
-
-	return categories, nil
 }

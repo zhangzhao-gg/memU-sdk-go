@@ -76,12 +76,12 @@ func main() {
 
 	sessionDate := "2024-01-15T10:30:00Z"
 	result, err := client.Memorize(ctx, &memu.MemorizeRequest{
-		Conversation:  conversation,
-		UserID:        userID,
-		AgentID:       agentID,
-		UserName:      "John Doe",
-		AgentName:     "Tennis Coach AI",
-		SessionDate:   &sessionDate,
+		Conversation: conversation,
+		UserID:       userID,
+		AgentID:      agentID,
+		UserName:     "John Doe",
+		AgentName:    "Tennis Coach AI",
+		SessionDate:  &sessionDate,
 	})
 
 	if err != nil {
@@ -113,9 +113,6 @@ func main() {
 		} else {
 			fmt.Printf("   Task ID: %s\n", status.TaskID)
 			fmt.Printf("   Status: %s\n", status.Status)
-			if status.Progress != nil {
-				fmt.Printf("   Progress: %.1f%%\n", *status.Progress)
-			}
 		}
 	}
 
@@ -125,7 +122,8 @@ func main() {
 	fmt.Println("\n📂 Step 3: Listing categories...")
 
 	categories, err := client.ListCategories(ctx, &memu.ListCategoriesRequest{
-		UserID: userID,
+		UserID:  userID,
+		AgentID: &agentID,
 	})
 
 	if err != nil {
@@ -136,25 +134,46 @@ func main() {
 			if i >= 5 {
 				break
 			}
+
+			// Print category name
 			name := "Unknown"
 			if cat.Name != nil {
 				name = *cat.Name
 			}
-			summary := ""
-			if cat.Summary != nil {
-				summary = *cat.Summary
-				if len(summary) > 50 {
-					summary = summary[:50] + "..."
+			fmt.Printf("\n      Category %d: %s\n", i+1, name)
+
+			// Print description
+			if cat.Description != nil && *cat.Description != "" {
+				desc := *cat.Description
+				if len(desc) > 80 {
+					desc = desc[:80] + "..."
 				}
+				fmt.Printf("         Description: %s\n", desc)
 			}
-			fmt.Printf("      - %s: %s\n", name, summary)
+
+			// Print summary
+			if cat.Summary != nil && *cat.Summary != "" {
+				summary := *cat.Summary
+				if len(summary) > 100 {
+					summary = summary[:100] + "..."
+				}
+				fmt.Printf("         Summary: %s\n", summary)
+			}
+
+			// Print user_id and agent_id
+			if cat.UserID != nil {
+				fmt.Printf("         User ID: %s\n", *cat.UserID)
+			}
+			if cat.AgentID != nil {
+				fmt.Printf("         Agent ID: %s\n", *cat.AgentID)
+			}
 		}
 	}
 
 	// =========================================================
-	// Step 4: Retrieve memories
+	// Step 4a: Retrieve memories with string query
 	// =========================================================
-	fmt.Println("\n🔍 Step 4: Retrieving memories...")
+	fmt.Println("\n🔍 Step 4a: Retrieving memories (string query)...")
 
 	memories, err := client.Retrieve(ctx, &memu.RetrieveRequest{
 		Query:   "What are the user's hobbies and interests?",
@@ -191,6 +210,56 @@ func main() {
 
 		if len(memories.Categories) > 0 {
 			fmt.Printf("   Related categories: %d\n", len(memories.Categories))
+		}
+	}
+
+	// =========================================================
+	// Step 4b: Retrieve memories with conversation array query
+	// =========================================================
+	fmt.Println("\n🔍 Step 4b: Retrieving memories (conversation array query)...")
+
+	conversationQuery := []memu.ConversationMessage{
+		{
+			Role:    "user",
+			Content: "What sports do I usually enjoy?",
+		},
+	}
+
+	memories2, err := client.Retrieve(ctx, &memu.RetrieveRequest{
+		Query:   conversationQuery,
+		UserID:  userID,
+		AgentID: agentID,
+	})
+
+	if err != nil {
+		fmt.Printf("   Note: %v\n", err)
+	} else {
+		if memories2.RewrittenQuery != nil {
+			fmt.Printf("   Rewritten Query: %s\n", *memories2.RewrittenQuery)
+		}
+		fmt.Printf("   Found %d memory items\n", len(memories2.Items))
+		if len(memories2.Items) > 0 {
+			for i, item := range memories2.Items {
+				if i >= 5 {
+					break
+				}
+				memType := "unknown"
+				if item.MemoryType != nil {
+					memType = *item.MemoryType
+				}
+				content := ""
+				if item.Content != nil {
+					content = *item.Content
+					if len(content) > 100 {
+						content = content[:100] + "..."
+					}
+				}
+				fmt.Printf("      - [%s] %s\n", memType, content)
+			}
+		}
+
+		if len(memories2.Categories) > 0 {
+			fmt.Printf("   Related categories: %d\n", len(memories2.Categories))
 		}
 	}
 
